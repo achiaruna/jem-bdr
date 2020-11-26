@@ -1,0 +1,731 @@
+---
+title: "TCR_Chord_6mice_CD4_Acute"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(Seurat)
+library(tidyverse)
+library(usethis)
+library(devtools)
+library(GGally)
+library(scales)
+library(monocle)
+#install.packages("VennDiagram")
+library(VennDiagram)
+
+
+library(ggplot2)
+library(reticulate)
+library(cowplot)
+library(viridis)
+library(Biostrings)
+library(ggpubr)
+library(ggbuildr)
+library(seqinr)
+library(pheatmap)
+
+#install.packages("circlize")
+library(circlize)
+library(reshape2)
+library(parallel)
+library(RColorBrewer)
+library(readxl)
+
+# set working dir
+# USING V3
+rm(list = ls())
+#base_path = "/world/Runa/Jem_revision/Seurat"
+#setwd(base_path)
+getwd()
+
+setwd("/media/runa/Elements/Jem_revision/Seurat/")
+getwd()
+
+```
+
+
+```{r}
+immune.combined_edit2 <- readRDS("summary_5M_CCA_V2/immune.combined_edit2_2cell.RDS")
+
+```
+
+
+```{r M1}
+# Initialize empty DF
+M1_cells <- immune.combined_edit2@meta.data %>% filter(mice == "M1")
+
+# Make adjacency matrix (using a data frame for convenience, will convert to matrix later)
+M1_adjacency <- matrix(
+  nrow = length(unique(M1_cells$v_gene_TRA)) + length(unique(M1_cells$v_gene_TRB)),
+  ncol = length(unique(M1_cells$j_gene_TRA)) + length(unique(M1_cells$j_gene_TRB))) %>%
+  as.data.frame()
+
+# Order rownames and colnames so they agree with the order that table() will produce (factors in ABC order); TRA will stay before TRB because TRA/B are part of gene names
+rownames(M1_adjacency) <- c(
+  as.character(unique(M1_cells$v_gene_TRA)),
+  as.character(unique(M1_cells$v_gene_TRB))) %>%
+  sort(decreasing = F)
+colnames(M1_adjacency) <- c(
+  as.character(unique(M1_cells$j_gene_TRA)),
+  as.character(unique(M1_cells$j_gene_TRB))) %>%
+  sort(decreasing = F)
+
+# Remove unused names from factor levels
+M1_cells$j_gene_TRA <- factor(M1_cells$j_gene_TRA)
+
+grep(pattern = "TRA", x = rownames(M1_adjacency)) # TRA rows are 1 through 43
+grep(pattern = "TRA", x = colnames(M1_adjacency)) # TRA columns are 1 through 34
+
+M1_TRA_row_stop <- grep(pattern = "TRA", x = rownames(M1_adjacency)) %>% tail(1) %>% as.numeric()
+M1_TRA_col_stop <- grep(pattern = "TRA", x = colnames(M1_adjacency)) %>% tail(1) %>% as.numeric()
+
+# Fill in adjacency matrix TRA chains
+for (i in rownames(M1_adjacency)[1:M1_TRA_row_stop]) {
+  M1_adjacency[i, 1:M1_TRA_col_stop] <- M1_cells[M1_cells$v_gene_TRA == i, "j_gene_TRA"] %>% table() %>% as.vector()
+}
+
+### Repeat for TRB chains
+M1_cells$j_gene_TRB <- factor(M1_cells$j_gene_TRB)
+
+grep(pattern = "TRB", x = rownames(M1_adjacency)) # TRB rows are 44 through 62
+grep(pattern = "TRB", x = colnames(M1_adjacency)) # TRB columns are 35 through 45
+
+M1_TRB_row_start <- M1_TRA_row_stop + 1
+M1_TRB_col_start <- M1_TRA_col_stop + 1
+
+# Fill in adjacency matrix TRB chains
+for (i in rownames(M1_adjacency)[M1_TRB_row_start:nrow(M1_adjacency)]) {
+  M1_adjacency[i, M1_TRB_col_start:ncol(M1_adjacency)] <- M1_cells[M1_cells$v_gene_TRB == i, "j_gene_TRB"] %>% table() %>% as.vector()
+}
+
+# Convert to matrix, then replace all NA values in adjacency matrix with 0
+M1_adjacency_mat <- as.matrix(M1_adjacency)
+M1_adjacency_mat[is.na(M1_adjacency_mat)] <- 0
+
+# Arrange by frequency of V chain usage, still separating by TRA and TRB
+M1_orderedrow <- M1_adjacency_mat[
+  c(
+    order(rowSums(M1_adjacency_mat[1:M1_TRA_row_stop,]), decreasing = T),
+    M1_TRA_row_stop + order(rowSums(M1_adjacency_mat[M1_TRB_row_start:nrow(M1_adjacency),]), decreasing = T)), ]
+
+# Arrange by frequency of J chain usage, still separating by TRA and TRB
+M1_orderedcol <- M1_orderedrow[ , c(
+     M1_TRA_col_stop + order(colSums(M1_orderedrow[, M1_TRB_col_start:ncol(M1_adjacency)]), decreasing = T),
+     order(colSums(M1_orderedrow[, 1:M1_TRA_col_stop]), decreasing = T))]
+# Place TRB first so the chord diagram flows from TRA V to TRB V to TRB J to TRA J
+```
+
+```{r M2}
+# Initialize empty DF
+M2_cells <- immune.combined_edit2@meta.data %>% filter(mice == "M2")
+
+# Make adjacency matrix (using a data frame for convenience, will convert to matrix later)
+M2_adjacency <- matrix(
+  nrow = length(unique(M2_cells$v_gene_TRA)) + length(unique(M2_cells$v_gene_TRB)),
+  ncol = length(unique(M2_cells$j_gene_TRA)) + length(unique(M2_cells$j_gene_TRB))) %>%
+  as.data.frame()
+
+# Order rownames and colnames so they agree with the order that table() will produce (factors in ABC order); TRA will stay before TRB because TRA/B are part of gene names
+rownames(M2_adjacency) <- c(
+  as.character(unique(M2_cells$v_gene_TRA)),
+  as.character(unique(M2_cells$v_gene_TRB))) %>%
+  sort(decreasing = F)
+colnames(M2_adjacency) <- c(
+  as.character(unique(M2_cells$j_gene_TRA)),
+  as.character(unique(M2_cells$j_gene_TRB))) %>%
+  sort(decreasing = F)
+
+# Remove unused names from factor levels
+M2_cells$j_gene_TRA <- factor(M2_cells$j_gene_TRA)
+
+grep(pattern = "TRA", x = rownames(M2_adjacency)) # TRA rows are 1 through 46
+grep(pattern = "TRA", x = colnames(M2_adjacency)) # TRA columns are 1 through 37
+
+M2_TRA_row_stop <- grep(pattern = "TRA", x = rownames(M2_adjacency)) %>% tail(1) %>% as.numeric()
+M2_TRA_col_stop <- grep(pattern = "TRA", x = colnames(M2_adjacency)) %>% tail(1) %>% as.numeric()
+
+# Fill in adjacency matrix TRA chains
+for (i in rownames(M2_adjacency)[1:M2_TRA_row_stop]) {
+  M2_adjacency[i, 1:M2_TRA_col_stop] <- M2_cells[M2_cells$v_gene_TRA == i, "j_gene_TRA"] %>% table() %>% as.vector()
+}
+
+### Repeat for TRB chains
+M2_cells$j_gene_TRB <- factor(M2_cells$j_gene_TRB)
+
+grep(pattern = "TRB", x = rownames(M2_adjacency)) # TRB rows are 47 through 63
+grep(pattern = "TRB", x = colnames(M2_adjacency)) # TRB columns are 38 through 48
+
+M2_TRB_row_start <- M2_TRA_row_stop + 1
+M2_TRB_col_start <- M2_TRA_col_stop + 1
+
+# Fill in adjacency matrix TRB chains
+for (i in rownames(M2_adjacency)[M2_TRB_row_start:nrow(M2_adjacency)]) {
+  M2_adjacency[i, M2_TRB_col_start:ncol(M2_adjacency)] <- M2_cells[M2_cells$v_gene_TRB == i, "j_gene_TRB"] %>% table() %>% as.vector()
+}
+
+# Convert to matrix, then replace all NA values in adjacency matrix with 0
+M2_adjacency_mat <- as.matrix(M2_adjacency)
+M2_adjacency_mat[is.na(M2_adjacency_mat)] <- 0
+
+# Arrange by frequency of V chain usage, still separating by TRA and TRB
+M2_orderedrow <- M2_adjacency_mat[
+  c(
+    order(rowSums(M2_adjacency_mat[1:M2_TRA_row_stop,]), decreasing = T),
+    M2_TRA_row_stop + order(rowSums(M2_adjacency_mat[M2_TRB_row_start:nrow(M2_adjacency),]), decreasing = T)), ]
+
+# Arrange by frequency of J chain usage, still separating by TRA and TRB
+M2_orderedcol <- M2_orderedrow[ , c(
+     M2_TRA_col_stop + order(colSums(M2_orderedrow[, M2_TRB_col_start:ncol(M2_adjacency)]), decreasing = T),
+     order(colSums(M2_orderedrow[, 1:M2_TRA_col_stop]), decreasing = T))]
+# Place TRB first so the chord diagram flows from TRA V to TRB V to TRB J to TRA J
+```
+
+```{r M3}
+# Initialize empty DF
+M3_cells <- immune.combined_edit2@meta.data %>% filter(mice == "M3")
+
+# Make adjacency matrix (using a data frame for convenience, will convert to matrix later)
+M3_adjacency <- matrix(
+  nrow = length(unique(M3_cells$v_gene_TRA)) + length(unique(M3_cells$v_gene_TRB)),
+  ncol = length(unique(M3_cells$j_gene_TRA)) + length(unique(M3_cells$j_gene_TRB))) %>%
+  as.data.frame()
+
+# Order rownames and colnames so they agree with the order that table() will produce (factors in ABC order); TRA will stay before TRB because TRA/B are part of gene names
+rownames(M3_adjacency) <- c(
+  as.character(unique(M3_cells$v_gene_TRA)),
+  as.character(unique(M3_cells$v_gene_TRB))) %>%
+  sort(decreasing = F)
+colnames(M3_adjacency) <- c(
+  as.character(unique(M3_cells$j_gene_TRA)),
+  as.character(unique(M3_cells$j_gene_TRB))) %>%
+  sort(decreasing = F)
+
+# Remove unused names from factor levels
+M3_cells$j_gene_TRA <- factor(M3_cells$j_gene_TRA)
+
+grep(pattern = "TRA", x = rownames(M3_adjacency)) # TRA rows are 1 through 37
+grep(pattern = "TRA", x = colnames(M3_adjacency)) # TRA columns are 1 through 30
+
+M3_TRA_row_stop <- grep(pattern = "TRA", x = rownames(M3_adjacency)) %>% tail(1) %>% as.numeric()
+M3_TRA_col_stop <- grep(pattern = "TRA", x = colnames(M3_adjacency)) %>% tail(1) %>% as.numeric()
+
+# Fill in adjacency matrix TRA chains
+for (i in rownames(M3_adjacency)[1:M3_TRA_row_stop]) {
+  M3_adjacency[i, 1:M3_TRA_col_stop] <- M3_cells[M3_cells$v_gene_TRA == i, "j_gene_TRA"] %>% table() %>% as.vector()
+}
+
+### Repeat for TRB chains
+M3_cells$j_gene_TRB <- factor(M3_cells$j_gene_TRB)
+
+grep(pattern = "TRB", x = rownames(M3_adjacency)) # TRB rows are 38 through 54
+grep(pattern = "TRB", x = colnames(M3_adjacency)) # TRB columns are 31 through 41
+
+M3_TRB_row_start <- M3_TRA_row_stop + 1
+M3_TRB_col_start <- M3_TRA_col_stop + 1
+
+# Fill in adjacency matrix TRB chains
+for (i in rownames(M3_adjacency)[M3_TRB_row_start:nrow(M3_adjacency)]) {
+  M3_adjacency[i, M3_TRB_col_start:ncol(M3_adjacency)] <- M3_cells[M3_cells$v_gene_TRB == i, "j_gene_TRB"] %>% table() %>% as.vector()
+}
+
+# Convert to matrix, then replace all NA values in adjacency matrix with 0
+M3_adjacency_mat <- as.matrix(M3_adjacency)
+M3_adjacency_mat[is.na(M3_adjacency_mat)] <- 0
+
+# Arrange by frequency of V chain usage, still separating by TRA and TRB
+M3_orderedrow <- M3_adjacency_mat[
+  c(
+    order(rowSums(M3_adjacency_mat[1:M3_TRA_row_stop,]), decreasing = T),
+    M3_TRA_row_stop + order(rowSums(M3_adjacency_mat[M3_TRB_row_start:nrow(M3_adjacency),]), decreasing = T)), ]
+
+# Arrange by frequency of J chain usage, still separating by TRA and TRB
+M3_orderedcol <- M3_orderedrow[ , c(
+     M3_TRA_col_stop + order(colSums(M3_orderedrow[, M3_TRB_col_start:ncol(M3_adjacency)]), decreasing = T),
+     order(colSums(M3_orderedrow[, 1:M3_TRA_col_stop]), decreasing = T))]
+# Place TRB first so the chord diagram flows from TRA V to TRB V to TRB J to TRA J
+```
+
+```{r M4}
+# Initialize empty DF
+M4_cells <- immune.combined_edit2@meta.data  %>% filter(mice == "M4")
+
+# Make adjacency matrix (using a data frame for convenience, will convert to matrix later)
+M4_adjacency <- matrix(
+  nrow = length(unique(M4_cells$v_gene_TRA)) + length(unique(M4_cells$v_gene_TRB)),
+  ncol = length(unique(M4_cells$j_gene_TRA)) + length(unique(M4_cells$j_gene_TRB))) %>%
+  as.data.frame()
+
+# Order rownames and colnames so they agree with the order that table() will produce (factors in ABC order); TRA will stay before TRB because TRA/B are part of gene names
+rownames(M4_adjacency) <- c(
+  as.character(unique(M4_cells$v_gene_TRA)),
+  as.character(unique(M4_cells$v_gene_TRB))) %>%
+  sort(decreasing = F)
+colnames(M4_adjacency) <- c(
+  as.character(unique(M4_cells$j_gene_TRA)),
+  as.character(unique(M4_cells$j_gene_TRB))) %>%
+  sort(decreasing = F)
+
+# Remove unused names from factor levels
+M4_cells$j_gene_TRA <- factor(M4_cells$j_gene_TRA)
+
+grep(pattern = "TRA", x = rownames(M4_adjacency)) # TRA rows are 1 through 44
+grep(pattern = "TRA", x = colnames(M4_adjacency)) # TRA columns are 1 through 36
+
+M4_TRA_row_stop <- grep(pattern = "TRA", x = rownames(M4_adjacency)) %>% tail(1) %>% as.numeric()
+M4_TRA_col_stop <- grep(pattern = "TRA", x = colnames(M4_adjacency)) %>% tail(1) %>% as.numeric()
+
+# Fill in adjacency matrix TRA chains
+for (i in rownames(M4_adjacency)[1:M4_TRA_row_stop]) {
+  M4_adjacency[i, 1:M4_TRA_col_stop] <- M4_cells[M4_cells$v_gene_TRA == i, "j_gene_TRA"] %>% table() %>% as.vector()
+}
+
+### Repeat for TRB chains
+M4_cells$j_gene_TRB <- factor(M4_cells$j_gene_TRB)
+
+grep(pattern = "TRB", x = rownames(M4_adjacency)) # TRB rows are 45 through 61
+grep(pattern = "TRB", x = colnames(M4_adjacency)) # TRB columns are 37 through 47
+
+M4_TRB_row_start <- M4_TRA_row_stop + 1
+M4_TRB_col_start <- M4_TRA_col_stop + 1
+
+# Fill in adjacency matrix TRB chains
+for (i in rownames(M4_adjacency)[M4_TRB_row_start:nrow(M4_adjacency)]) {
+  M4_adjacency[i, M4_TRB_col_start:ncol(M4_adjacency)] <- M4_cells[M4_cells$v_gene_TRB == i, "j_gene_TRB"] %>% table() %>% as.vector()
+}
+
+# Convert to matrix, then replace all NA values in adjacency matrix with 0
+M4_adjacency_mat <- as.matrix(M4_adjacency)
+M4_adjacency_mat[is.na(M4_adjacency_mat)] <- 0
+
+# Arrange by frequency of V chain usage, still separating by TRA and TRB
+M4_orderedrow <- M4_adjacency_mat[
+  c(
+    order(rowSums(M4_adjacency_mat[1:M4_TRA_row_stop,]), decreasing = T),
+    M4_TRA_row_stop + order(rowSums(M4_adjacency_mat[M4_TRB_row_start:nrow(M4_adjacency),]), decreasing = T)), ]
+
+# Arrange by frequency of J chain usage, still separating by TRA and TRB
+M4_orderedcol <- M4_orderedrow[ , c(
+     M4_TRA_col_stop + order(colSums(M4_orderedrow[, M4_TRB_col_start:ncol(M4_adjacency)]), decreasing = T),
+     order(colSums(M4_orderedrow[, 1:M4_TRA_col_stop]), decreasing = T))]
+# Place TRB first so the chord diagram flows from TRA V to TRB V to TRB J to TRA J
+```
+
+
+
+```{r M6}
+# Initialize empty DF
+M6_cells <- immune.combined_edit2@meta.data  %>% filter(mice == "M6")
+
+# Make adjacency matrix (using a data frame for convenience, will convert to matrix later)
+M6_adjacency <- matrix(
+  nrow = length(unique(M6_cells$v_gene_TRA)) + length(unique(M6_cells$v_gene_TRB)),
+  ncol = length(unique(M6_cells$j_gene_TRA)) + length(unique(M6_cells$j_gene_TRB))) %>%
+  as.data.frame()
+
+# Order rownames and colnames so they agree with the order that table() will produce (factors in ABC order); TRA will stay before TRB because TRA/B are part of gene names
+rownames(M6_adjacency) <- c(
+  as.character(unique(M6_cells$v_gene_TRA)),
+  as.character(unique(M6_cells$v_gene_TRB))) %>%
+  sort(decreasing = F)
+colnames(M6_adjacency) <- c(
+  as.character(unique(M6_cells$j_gene_TRA)),
+  as.character(unique(M6_cells$j_gene_TRB))) %>%
+  sort(decreasing = F)
+
+# Remove unused names from factor levels
+M6_cells$j_gene_TRA <- factor(M6_cells$j_gene_TRA)
+
+grep(pattern = "TRA", x = rownames(M6_adjacency)) # TRA rows are 1 through 42
+grep(pattern = "TRA", x = colnames(M6_adjacency)) # TRA columns are 1 through 37
+
+M6_TRA_row_stop <- grep(pattern = "TRA", x = rownames(M6_adjacency)) %>% tail(1) %>% as.numeric()
+M6_TRA_col_stop <- grep(pattern = "TRA", x = colnames(M6_adjacency)) %>% tail(1) %>% as.numeric()
+
+# Fill in adjacency matrix TRA chains
+for (i in rownames(M6_adjacency)[1:M6_TRA_row_stop]) {
+  M6_adjacency[i, 1:M6_TRA_col_stop] <- M6_cells[M6_cells$v_gene_TRA == i, "j_gene_TRA"] %>% table() %>% as.vector()
+}
+
+### Repeat for TRB chains
+M6_cells$j_gene_TRB <- factor(M6_cells$j_gene_TRB)
+
+# grep(pattern = "TRB", x = rownames(M4_adjacency)) # TRB rows are 33 through 48
+# grep(pattern = "TRB", x = colnames(M4_adjacency)) # TRB columns are 24 through 33
+
+M6_TRB_row_start <- M6_TRA_row_stop + 1
+M6_TRB_col_start <- M6_TRA_col_stop + 1
+
+# Fill in adjacency matrix TRB chains
+for (i in rownames(M6_adjacency)[M6_TRB_row_start:nrow(M6_adjacency)]) {
+  M6_adjacency[i, M6_TRB_col_start:ncol(M6_adjacency)] <- M6_cells[M6_cells$v_gene_TRB == i, "j_gene_TRB"] %>% table() %>% as.vector()
+}
+
+# Convert to matrix, then replace all NA values in adjacency matrix with 0
+M6_adjacency_mat <- as.matrix(M6_adjacency)
+M6_adjacency_mat[is.na(M6_adjacency_mat)] <- 0
+
+# Arrange by frequency of V chain usage, still separating by TRA and TRB
+M6_orderedrow <- M6_adjacency_mat[
+  c(
+    order(rowSums(M6_adjacency_mat[1:M6_TRA_row_stop,]), decreasing = T),
+    M6_TRA_row_stop + order(rowSums(M6_adjacency_mat[M6_TRB_row_start:nrow(M6_adjacency),]), decreasing = T)), ]
+
+# Arrange by frequency of J chain usage, still separating by TRA and TRB
+M6_orderedcol <- M6_orderedrow[ , c(
+     M6_TRA_col_stop + order(colSums(M6_orderedrow[, M6_TRB_col_start:ncol(M6_adjacency)]), decreasing = T),
+     order(colSums(M6_orderedrow[, 1:M6_TRA_col_stop]), decreasing = T))]
+# Place TRB first so the chord diagram flows from TRA V to TRB V to TRB J to TRA J
+```
+
+```{r color assessment}
+color <- grDevices::colors()[grep('gr(a|e)y', grDevices::colors(), invert = T)] # Remove grays
+color <- color[grep("white", color, invert = T)] # Remove whites
+
+# Assign unique color to each gene that's consistent across all three graphs
+combined_dimnames <- dimnames(M1_adjacency_mat) %>%
+  union(dimnames(M2_adjacency_mat)) %>%
+  unlist() %>%
+  union(dimnames(M3_adjacency_mat)) %>%
+  unlist() %>%
+  union(dimnames(M4_adjacency_mat)) %>%
+  unlist() %>%
+  union(dimnames(M6_adjacency_mat)) %>%
+  unlist() %>%
+  unique() %>% 
+  sort()
+
+# Set colors
+#set.seed(98) # Set seed for reproducibility of colors 
+set.seed(112) # Set seed for reproducibility of colors 
+combined_colors <- setNames(sample(color, length(combined_dimnames)), combined_dimnames)
+
+```
+
+```{r M1 graph}
+### Run this entire chunk IN THE CONSOLE at once or the graph won't render properly
+### Need to run in the console so you can use the plot viewer to save
+# Saved as 6 x 6 inch figure
+# "16_Chord_M1.pdf"
+pdf("summary_5mice/Figure1/Figure1_M1_AB_TCR_Chord_editted_V3.pdf", width = 8, height = 7)
+circos.clear()
+row_sum <- sum(rowSums(abs(M1_orderedcol)))
+col_sum <- sum(colSums(abs(M1_orderedcol)))
+small_gap <- 1 # Gaps measured in degrees
+big_gap <- 10
+nr <- nrow(M1_orderedcol)
+nc <- ncol(M1_orderedcol)
+n_sector <- nr + nc
+row_sector_degree <- (360 - small_gap*(n_sector - 2) - big_gap*2) * (row_sum/(row_sum + col_sum)) + small_gap*(nr-1)
+start_degree <- 0 - (180 - row_sector_degree)/2
+gaps <- c(
+  rep(small_gap, M1_TRA_row_stop - 1),
+  big_gap,
+  rep(small_gap, nrow(M1_adjacency_mat) - M1_TRB_row_start),
+  big_gap, rep(small_gap, ncol(M1_adjacency_mat) - M1_TRB_col_start),
+  big_gap, rep(small_gap, M1_TRA_col_stop - 1),
+  big_gap) 
+# Small gaps between genes of the same kind (e.g. TRA J), large gaps between different types of genes (e.g. TRA J and TRA V)
+circos.par(gap.after = gaps, start.degree = start_degree)
+
+M1_percent <- c(rowSums(M1_adjacency_mat)[1:M1_TRA_row_stop] / sum(M1_adjacency_mat[1:M1_TRA_row_stop, ]),
+                rowSums(M1_adjacency_mat)[M1_TRB_row_start:nrow(M1_adjacency_mat)] / sum(M1_adjacency_mat[M1_TRB_row_start:nrow(M1_adjacency_mat), ]),
+                colSums(M1_adjacency_mat)[M1_TRB_col_start:ncol(M1_adjacency_mat)] / sum(M1_adjacency_mat[, M1_TRB_col_start:ncol(M1_adjacency_mat)]),
+                colSums(M1_adjacency_mat)[1:M1_TRA_col_stop] / sum(M1_adjacency_mat[, 1:M1_TRA_col_stop])) * 100
+# 11:20 comes before 1:10 because we want TRB J to immediately follow TRB V as we move around the circle
+
+
+chordDiagram(
+  M1_orderedcol,
+  annotationTrack = "grid",
+  preAllocateTracks = 1,
+  grid.col = combined_colors[
+    intersect(
+      names(combined_colors),
+      unlist(dimnames(M1_adjacency_mat)))])
+
+circos.trackPlotRegion(
+  track.index = 1,
+  panel.fun = function(x, y) {
+    xlim = get.cell.meta.data("xlim")
+    ylim = get.cell.meta.data("ylim")
+    sector.name = get.cell.meta.data("sector.index")
+    circos.text(mean(xlim), ylim[1] + .1, sector.name, facing = "clockwise", niceFacing = TRUE, adj = c(-0.2, 0.5), cex = 0.7)
+    circos.axis(h = "top", labels.cex = 0.5, major.tick.percentage = 0.2, sector.index = sector.name, track.index = 2)
+  },
+  bg.border = NA)
+
+circos.track(
+  track.index = 2,
+  panel.fun = function(x, y) {
+    sector.index = get.cell.meta.data("sector.index")
+    xlim = get.cell.meta.data("xlim")
+    ylim = get.cell.meta.data("ylim")
+    circos.text(mean(xlim), mean(ylim), round(M1_percent[sector.index], 1), cex = 0.8, col = "white", niceFacing = TRUE)
+  },
+  bg.border = NA)
+dev.off()
+```
+
+
+```{r M2 graph}
+### Run this entire chunk IN THE CONSOLE at once or the graph won't render properly
+### Need to run in the console so you can use the plot viewer to save
+# Saved as 6 x 6 inch figure
+# "16_Chord_M2.pdf"
+pdf("summary_5mice/Figure1/Figure1_M2_AB_TCR_Chord_editted_V3.pdf", width = 8, height = 7)
+circos.clear()
+row_sum <- sum(rowSums(abs(M2_orderedcol)))
+col_sum <- sum(colSums(abs(M2_orderedcol)))
+small_gap <- 1 # Gaps measured in degrees
+big_gap <- 10
+nr <- nrow(M2_orderedcol)
+nc <- ncol(M2_orderedcol)
+n_sector <- nr + nc
+row_sector_degree <- (360 - small_gap*(n_sector - 2) - big_gap*2) * (row_sum/(row_sum + col_sum)) + small_gap*(nr-1)
+start_degree <- 0 - (180 - row_sector_degree)/2
+gaps <- c(
+  rep(small_gap, M2_TRA_row_stop - 1),
+  big_gap,
+  rep(small_gap, nrow(M2_adjacency_mat) - M2_TRB_row_start),
+  big_gap, rep(small_gap, ncol(M2_adjacency_mat) - M2_TRB_col_start),
+  big_gap, rep(small_gap, M2_TRA_col_stop - 1),
+  big_gap) 
+# Small gaps between genes of the same kind (e.g. TRA J), large gaps between different types of genes (e.g. TRA J and TRA V)
+circos.par(gap.after = gaps, start.degree = start_degree)
+
+M2_percent <- c(rowSums(M2_adjacency_mat)[1:M2_TRA_row_stop] / sum(M2_adjacency_mat[1:M2_TRA_row_stop, ]),
+                rowSums(M2_adjacency_mat)[M2_TRB_row_start:nrow(M2_adjacency_mat)] / sum(M2_adjacency_mat[M2_TRB_row_start:nrow(M2_adjacency_mat), ]),
+                colSums(M2_adjacency_mat)[M2_TRB_col_start:ncol(M2_adjacency_mat)] / sum(M2_adjacency_mat[, M2_TRB_col_start:ncol(M2_adjacency_mat)]),
+                colSums(M2_adjacency_mat)[1:M2_TRA_col_stop] / sum(M2_adjacency_mat[, 1:M2_TRA_col_stop])) * 100
+# 11:20 comes before 1:10 because we want TRB J to immediately follow TRB V as we move around the circle
+
+chordDiagram(
+  M2_orderedcol,
+  annotationTrack = "grid",
+  preAllocateTracks = 1,
+  grid.col = combined_colors[
+    intersect(
+      names(combined_colors),
+      unlist(dimnames(M2_adjacency_mat)))])
+
+circos.trackPlotRegion(
+  track.index = 1,
+  panel.fun = function(x, y) {
+    xlim = get.cell.meta.data("xlim")
+    ylim = get.cell.meta.data("ylim")
+    sector.name = get.cell.meta.data("sector.index")
+    circos.text(mean(xlim), ylim[1] + .1, sector.name, facing = "clockwise", niceFacing = TRUE, adj = c(-0.2, 0.5), cex = 0.7)
+    circos.axis(h = "top", labels.cex = 0.5, major.tick.percentage = 0.2, sector.index = sector.name, track.index = 2)
+  },
+  bg.border = NA)
+
+circos.track(
+  track.index = 2,
+  panel.fun = function(x, y) {
+    sector.index = get.cell.meta.data("sector.index")
+    xlim = get.cell.meta.data("xlim")
+    ylim = get.cell.meta.data("ylim")
+    circos.text(mean(xlim), mean(ylim), round(M2_percent[sector.index], 1), cex = 0.8, col = "white", niceFacing = TRUE)
+  },
+  bg.border = NA)
+dev.off()
+```
+
+```{r M3 graph}
+### Run this entire chunk IN THE CONSOLE at once or the graph won't render properly
+### Need to run in the console so you can use the plot viewer to save
+# Saved as 6 x 6 inch figure
+# "16_Chord_M3.pdf"
+pdf("summary_5mice/Figure1/Figure1_M3_AB_TCR_Chord_editted_V3.pdf", width = 8, height = 7)
+circos.clear()
+row_sum <- sum(rowSums(abs(M3_orderedcol)))
+col_sum <- sum(colSums(abs(M3_orderedcol)))
+small_gap <- 1 # Gaps measured in degrees
+big_gap <- 10
+nr <- nrow(M3_orderedcol)
+nc <- ncol(M3_orderedcol)
+n_sector <- nr + nc
+row_sector_degree <- (360 - small_gap*(n_sector - 2) - big_gap*2) * (row_sum/(row_sum + col_sum)) + small_gap*(nr-1)
+start_degree <- 0 - (180 - row_sector_degree)/2
+gaps <- c(
+  rep(small_gap, M3_TRA_row_stop - 1),
+  big_gap,
+  rep(small_gap, nrow(M3_adjacency_mat) - M3_TRB_row_start),
+  big_gap, rep(small_gap, ncol(M3_adjacency_mat) - M3_TRB_col_start),
+  big_gap, rep(small_gap, M3_TRA_col_stop - 1),
+  big_gap) 
+# Small gaps between genes of the same kind (e.g. TRA J), large gaps between different types of genes (e.g. TRA J and TRA V)
+circos.par(gap.after = gaps, start.degree = start_degree)
+
+M3_percent <- c(rowSums(M3_adjacency_mat)[1:M3_TRA_row_stop] / sum(M3_adjacency_mat[1:M3_TRA_row_stop, ]),
+                rowSums(M3_adjacency_mat)[M3_TRB_row_start:nrow(M3_adjacency_mat)] / sum(M3_adjacency_mat[M3_TRB_row_start:nrow(M3_adjacency_mat), ]),
+                colSums(M3_adjacency_mat)[M3_TRB_col_start:ncol(M3_adjacency_mat)] / sum(M3_adjacency_mat[, M3_TRB_col_start:ncol(M3_adjacency_mat)]),
+                colSums(M3_adjacency_mat)[1:M3_TRA_col_stop] / sum(M3_adjacency_mat[, 1:M3_TRA_col_stop])) * 100
+# 11:20 comes before 1:10 because we want TRB J to immediately follow TRB V as we move around the circle
+
+chordDiagram(
+  M3_orderedcol,
+  annotationTrack = "grid",
+  preAllocateTracks = 1,
+  grid.col = combined_colors[
+    intersect(
+      names(combined_colors),
+      unlist(dimnames(M3_adjacency_mat)))])
+
+circos.trackPlotRegion(
+  track.index = 1,
+  panel.fun = function(x, y) {
+    xlim = get.cell.meta.data("xlim")
+    ylim = get.cell.meta.data("ylim")
+    sector.name = get.cell.meta.data("sector.index")
+    circos.text(mean(xlim), ylim[1] + .1, sector.name, facing = "clockwise", niceFacing = TRUE, adj = c(-0.2, 0.5), cex = 0.7)
+    circos.axis(h = "top", labels.cex = 0.5, major.tick.percentage = 0.2, sector.index = sector.name, track.index = 2)
+  },
+  bg.border = NA)
+
+circos.track(
+  track.index = 2,
+  panel.fun = function(x, y) {
+    sector.index = get.cell.meta.data("sector.index")
+    xlim = get.cell.meta.data("xlim")
+    ylim = get.cell.meta.data("ylim")
+    circos.text(mean(xlim), mean(ylim), round(M3_percent[sector.index], 1), cex = 0.8, col = "white", niceFacing = TRUE)
+  },
+  bg.border = NA)
+dev.off()
+```
+```{r M4 graph}
+### Run this entire chunk IN THE CONSOLE at once or the graph won't render properly
+### Need to run in the console so you can use the plot viewer to save
+# Saved as 6 x 6 inch figure
+# "16_Chord_M4.pdf"
+pdf("summary_5mice/Figure1/Figure1_M4_AB_TCR_Chord_editted_V3.pdf", width = 8, height = 7)
+circos.clear()
+row_sum <- sum(rowSums(abs(M4_orderedcol)))
+col_sum <- sum(colSums(abs(M4_orderedcol)))
+small_gap <- 1 # Gaps measured in degrees
+big_gap <- 10
+nr <- nrow(M4_orderedcol)
+nc <- ncol(M4_orderedcol)
+n_sector <- nr + nc
+row_sector_degree <- (360 - small_gap*(n_sector - 2) - big_gap*2) * (row_sum/(row_sum + col_sum)) + small_gap*(nr-1)
+start_degree <- 0 - (180 - row_sector_degree)/2
+gaps <- c(
+  rep(small_gap, M4_TRA_row_stop - 1),
+  big_gap,
+  rep(small_gap, nrow(M4_adjacency_mat) - M4_TRB_row_start),
+  big_gap, rep(small_gap, ncol(M4_adjacency_mat) - M4_TRB_col_start),
+  big_gap, rep(small_gap, M4_TRA_col_stop - 1),
+  big_gap) 
+# Small gaps between genes of the same kind (e.g. TRA J), large gaps between different types of genes (e.g. TRA J and TRA V)
+circos.par(gap.after = gaps, start.degree = start_degree)
+
+M4_percent <- c(rowSums(M4_adjacency_mat)[1:M4_TRA_row_stop] / sum(M4_adjacency_mat[1:M4_TRA_row_stop, ]),
+                rowSums(M4_adjacency_mat)[M4_TRB_row_start:nrow(M4_adjacency_mat)] / sum(M4_adjacency_mat[M4_TRB_row_start:nrow(M4_adjacency_mat), ]),
+                colSums(M4_adjacency_mat)[M4_TRB_col_start:ncol(M4_adjacency_mat)] / sum(M4_adjacency_mat[, M4_TRB_col_start:ncol(M4_adjacency_mat)]),
+                colSums(M4_adjacency_mat)[1:M4_TRA_col_stop] / sum(M4_adjacency_mat[, 1:M4_TRA_col_stop])) * 100
+# 11:20 comes before 1:10 because we want TRB J to immediately follow TRB V as we move around the circle
+
+chordDiagram(
+  M4_orderedcol,
+  annotationTrack = "grid",
+  preAllocateTracks = 1,
+  grid.col = combined_colors[
+    intersect(
+      names(combined_colors),
+      unlist(dimnames(M4_adjacency_mat)))])
+
+circos.trackPlotRegion(
+  track.index = 1,
+  panel.fun = function(x, y) {
+    xlim = get.cell.meta.data("xlim")
+    ylim = get.cell.meta.data("ylim")
+    sector.name = get.cell.meta.data("sector.index")
+    circos.text(mean(xlim), ylim[1] + .1, sector.name, facing = "clockwise", niceFacing = TRUE, adj = c(-0.2, 0.5), cex = 0.7)
+    circos.axis(h = "top", labels.cex = 0.5, major.tick.percentage = 0.2, sector.index = sector.name, track.index = 2)
+  },
+  bg.border = NA)
+
+circos.track(
+  track.index = 2,
+  panel.fun = function(x, y) {
+    sector.index = get.cell.meta.data("sector.index")
+    xlim = get.cell.meta.data("xlim")
+    ylim = get.cell.meta.data("ylim")
+    circos.text(mean(xlim), mean(ylim), round(M4_percent[sector.index], 1), cex = 0.8, col = "white", niceFacing = TRUE)
+  },
+  bg.border = NA)
+dev.off()
+
+```
+
+```{r M6 graph}
+### Run this entire chunk IN THE CONSOLE at once or the graph won't render properly
+### Need to run in the console so you can use the plot viewer to save
+# Saved as 6 x 6 inch figure
+# "16_Chord_M4.pdf"
+
+pdf("summary_5mice/Figure1/Figure1_M6_AB_TCR_Chord_editted_V3.pdf", width = 8, height = 7)
+circos.clear()
+row_sum <- sum(rowSums(abs(M6_orderedcol)))
+col_sum <- sum(colSums(abs(M6_orderedcol)))
+small_gap <- 1 # Gaps measured in degrees
+big_gap <- 10
+nr <- nrow(M6_orderedcol)
+nc <- ncol(M6_orderedcol)
+n_sector <- nr + nc
+row_sector_degree <- (360 - small_gap*(n_sector - 2) - big_gap*2) * (row_sum/(row_sum + col_sum)) + small_gap*(nr-1)
+start_degree <- 0 - (180 - row_sector_degree)/2
+gaps <- c(
+  rep(small_gap, M6_TRA_row_stop - 1),
+  big_gap,
+  rep(small_gap, nrow(M6_adjacency_mat) - M6_TRB_row_start),
+  big_gap, rep(small_gap, ncol(M6_adjacency_mat) - M6_TRB_col_start),
+  big_gap, rep(small_gap, M6_TRA_col_stop - 1),
+  big_gap) 
+# Small gaps between genes of the same kind (e.g. TRA J), large gaps between different types of genes (e.g. TRA J and TRA V)
+circos.par(gap.after = gaps, start.degree = start_degree)
+
+M6_percent <- c(rowSums(M6_adjacency_mat)[1:M6_TRA_row_stop] / sum(M6_adjacency_mat[1:M6_TRA_row_stop, ]),
+                rowSums(M6_adjacency_mat)[M6_TRB_row_start:nrow(M6_adjacency_mat)] / sum(M6_adjacency_mat[M6_TRB_row_start:nrow(M6_adjacency_mat), ]),
+                colSums(M6_adjacency_mat)[M6_TRB_col_start:ncol(M6_adjacency_mat)] / sum(M6_adjacency_mat[, M6_TRB_col_start:ncol(M6_adjacency_mat)]),
+                colSums(M6_adjacency_mat)[1:M6_TRA_col_stop] / sum(M6_adjacency_mat[, 1:M6_TRA_col_stop])) * 100
+# 11:20 comes before 1:10 because we want TRB J to immediately follow TRB V as we move around the circle
+
+chordDiagram(
+  M6_orderedcol,
+  annotationTrack = "grid",
+  preAllocateTracks = 1,
+  grid.col = combined_colors[
+    intersect(
+      names(combined_colors),
+      unlist(dimnames(M6_adjacency_mat)))])
+
+circos.trackPlotRegion(
+  track.index = 1,
+  panel.fun = function(x, y) {
+    xlim = get.cell.meta.data("xlim")
+    ylim = get.cell.meta.data("ylim")
+    sector.name = get.cell.meta.data("sector.index")
+    circos.text(mean(xlim), ylim[1] + .1, sector.name, facing = "clockwise", niceFacing = TRUE, adj = c(-0.2, 0.5), cex = 0.7)
+    circos.axis(h = "top", labels.cex = 0.5, major.tick.percentage = 0.2, sector.index = sector.name, track.index = 2)
+  },
+  bg.border = NA)
+
+circos.track(
+  track.index = 2,
+  panel.fun = function(x, y) {
+    sector.index = get.cell.meta.data("sector.index")
+    xlim = get.cell.meta.data("xlim")
+    ylim = get.cell.meta.data("ylim")
+    circos.text(mean(xlim), mean(ylim), round(M6_percent[sector.index], 1), cex = 0.8, col = "white", niceFacing = TRUE)
+  },
+  bg.border = NA)
+dev.off()
+```
+

@@ -1,0 +1,361 @@
+---
+title: "cellsubset_sp_TCR_Chord"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(Seurat)
+library(tidyverse)
+library(usethis)
+library(devtools)
+library(GGally)
+library(scales)
+library(monocle)
+#install.packages("VennDiagram")
+library(VennDiagram)
+
+
+library(ggplot2)
+library(reticulate)
+library(cowplot)
+library(viridis)
+library(Biostrings)
+library(ggpubr)
+library(ggbuildr)
+library(seqinr)
+library(pheatmap)
+
+#install.packages("circlize")
+library(circlize)
+library(reshape2)
+library(parallel)
+library(RColorBrewer)
+library(readxl)
+
+# set working dir
+# USING V3
+rm(list = ls())
+base_path = "/world/Runa/Jem_revision/Seurat"
+setwd(base_path)
+getwd()
+
+setwd("/media/runa/Elements/Jem_revision/Seurat/")
+getwd()
+
+```
+
+```{r}
+
+rm(list=ls())
+save.image(file='July8.RData')
+load("July8.RData") # 06292020
+
+rm(Acute_CD4_6mice_clones_by_ident)
+
+
+data_clones_by_mouse_TRA_TRB <- read.csv("summary_5mice/data_clones_by_mouse_TRA_TRB_5mice.csv")
+
+# make a DF having combined CDR3nt and Monocle cell fate based on 65% thresold for clones >= 4 cells
+rm(clone3Lin6Df)
+clone3Lin6Df <- data_clones_by_mouse_TRA_TRB %>% filter(Freq >= 4) %>% select(combined_cdr3_nt, CDR3nt_Ident, mice, Monocle_Th1, Monocle_Tcmp, Monocle_TFH, Percent_Monocle_Th1, Percent_Monocle_Tcmp, Percent_Monocle_TFH) %>% as.data.frame()
+
+clone3Lin6Df$Total_cells <- rowSums(clone3Lin6Df[, 4:6])
+
+# Make a new column that specifies cell fate (Th1, TFH, Tcmp, multifate)
+clone3Lin6Df$Fate <- ""
+for (i in 1:nrow(clone3Lin6Df)) {
+  if (clone3Lin6Df$Percent_Monocle_Th1[i] >= 65) {
+    clone3Lin6Df$Fate[i] <- "Th1"
+  }
+  if (clone3Lin6Df$Percent_Monocle_TFH[i] >= 65) {
+    clone3Lin6Df$Fate[i] <- "TFH"
+  }
+  if (clone3Lin6Df$Percent_Monocle_Tcmp[i] >= 65) {
+    clone3Lin6Df$Fate[i] <- "Tcmp"
+  }
+}
+clone3Lin6Df$Fate[which(clone3Lin6Df$Fate == "")] <- "Multifate"
+clone3Lin6Df$Fate <- as.factor(clone3Lin6Df$Fate)
+
+
+```
+
+```{r subset DF for Th1 and TFH sp based on >65% threshold based on Moncle states}
+
+table(clone3Lin6Df$mice)
+#M1 M2 M3 M4 M6 
+#63 70 59 72 88 
+table(clone3Lin6Df$Fate)
+
+#  Multifate      Tcmp     TFH       Th1 
+ #     160         1       128        63 
+
+
+table(clone3Lin6Df$mice, clone3Lin6Df$Fate)
+#     Multifate Tcmp TFH Th1
+ # M1        32    0  20  11
+#  M2        23    0  33  14
+#  M3        21    0  31   7
+#  M4        37    1  22  12
+#  M6        47    0  22  19
+
+rm(immune.combined_edit2_2cell)
+
+immune.combined_edit3_2cell <- readRDS("summary_5M_CCA_V2/immune.combined_edit3_2cell.RDS")
+
+clone3Lin6Df_65 <- read.csv("summary_5mice/clone3Lin6Df_65.csv")
+
+clone3Lin6Df_65$X1 <- NULL
+
+clone3Lin6Df_65Th1 <- clone3Lin6Df_65[which(clone3Lin6Df_65$Fate == "Th1"), ]
+clone3Lin6Df_65TFH <- clone3Lin6Df_65[which(clone3Lin6Df_65$Fate == "TFH"), ]
+#clone3Lin6Df_Multifate <- clone3Lin6Df[which(clone3Lin6Df$Fate == "Multifate"), ]
+colnames(clone3Lin6Df_65TFH)
+colnames(clone3Lin6Df_65Th1)
+
+clone3Lin6Df_65TFH$X <- NULL
+clone3Lin6Df_65Th1$X <- NULL
+
+
+```
+
+```{r add all entries from meta data matching combined CDR3 nt TFH }
+clone3Lin6Df_65TFH_cells <- data.frame()
+
+# Add all entries from data@meta.data that match TFH CDR3 NT sequences
+for (i in clone3Lin6Df_65TFH$combined_cdr3_nt) {
+  clone3Lin6Df_65TFH_cells <- rbind(clone3Lin6Df_65TFH_cells, immune.combined_edit3_2cell@meta.data[grep(pattern = i, x = immune.combined_edit3_2cell@meta.data$combined_cdr3_nt), ])
+}
+
+rm(TFH_adjacency)
+# Make adjacency matrix (using a data frame for convenience, will convert to matrix later)
+TFH_adjacency <- matrix(nrow = length(unique(clone3Lin6Df_65TFH_cells $v_gene_TRA)) + length(unique(clone3Lin6Df_65TFH_cells$v_gene_TRB)), ncol = length(unique(clone3Lin6Df_65TFH_cells$j_gene_TRA)) + length(unique(clone3Lin6Df_65TFH_cells$j_gene_TRB))) %>% as.data.frame()
+
+# Order rownames and colnames so they agree with the order that table() will produce (factors in ABC order); TRA will stay before TRB because TRA/B are part of gene names
+rownames(TFH_adjacency) <- c(as.character(unique(clone3Lin6Df_65TFH_cells$v_gene_TRA)), as.character(unique(clone3Lin6Df_65TFH_cells$v_gene_TRB))) %>% sort(decreasing = F)
+colnames(TFH_adjacency) <- c(as.character(unique(clone3Lin6Df_65TFH_cells$j_gene_TRA)), as.character(unique(clone3Lin6Df_65TFH_cells$j_gene_TRB))) %>% sort(decreasing = F)
+
+# Remove unused names from factor levels
+clone3Lin6Df_65TFH_cells$j_gene_TRA <- factor(clone3Lin6Df_65TFH_cells$j_gene_TRA)
+
+grep(pattern = "TRA", x = rownames(TFH_adjacency)) # TRA rows are 1 through 51
+grep(pattern = "TRA", x = colnames(TFH_adjacency)) # TRA columns are 1 through 50
+
+
+#grep(pattern = "TRA", x = rownames(TFH_adjacency)) # TRA rows are 1 through 40
+#grep(pattern = "TRA", x = colnames(TFH_adjacency)) # TRA columns are 1 through 41
+
+
+
+
+# Fill in adjacency matrix TRA chains
+for (i in rownames(TFH_adjacency)[1:51]) {
+  TFH_adjacency[i, 1:50] <- clone3Lin6Df_65TFH_cells[clone3Lin6Df_65TFH_cells$v_gene_TRA == i, "j_gene_TRA"] %>% table() %>% as.vector()
+}
+
+### Repeat for TRB chains
+clone3Lin6Df_65TFH_cells$j_gene_TRB <- factor(clone3Lin6Df_65TFH_cells$j_gene_TRB)
+
+grep(pattern = "TRB", x = rownames(TFH_adjacency)) # TRB rows are 52 through 78
+grep(pattern = "TRB", x = colnames(TFH_adjacency)) # TRB columns are 51 through 71
+
+
+#grep(pattern = "TRB", x = rownames(TFH_adjacency)) # TRB rows are 41 through 64
+#grep(pattern = "TRB", x = colnames(TFH_adjacency)) # TRB columns are 42 through 61
+
+
+
+
+# Fill in adjacency matrix TRB chains
+for (i in rownames(TFH_adjacency)[52:78]) {
+  TFH_adjacency[i, 51:71] <- clone3Lin6Df_65TFH_cells[clone3Lin6Df_65TFH_cells$v_gene_TRB == i, "j_gene_TRB"] %>% table() %>% as.vector()
+}
+
+# Convert to matrix, then replace all NA values in adjacency matrix with 0
+TFH_adjacency_mat <- as.matrix(TFH_adjacency)
+TFH_adjacency_mat[is.na(TFH_adjacency_mat)] <- 0
+
+# Arrange by frequency of V chain usage, still separating by TRA and TRB
+TFH_orderedrow <- TFH_adjacency_mat[c(order(rowSums(TFH_adjacency_mat[1:51,]), decreasing = T), 51 + order(rowSums(TFH_adjacency_mat[52:78,]), decreasing = T)),]
+# Add 40 to make the ordering match the row number in the matrix
+
+# Arrange by frequency of J chain usage, still separating by TRA and TRB
+TFH_orderedcol <- TFH_orderedrow[, c(50 + order(colSums(TFH_orderedrow[, 51:71]), decreasing = T), order(colSums(TFH_orderedrow[, 1:50]), decreasing = T))]
+# Add 10 to make the ordering match the column number in the matrix
+# Place TRB first so the chord diagram flows from TRA V to TRB V to TRB J to TRA J
+
+```
+
+
+```{r r add all entries from meta data matching combined CDR3 nt Th1 }
+rm(clone3Lin6Df_Th1_cells)
+clone3Lin6Df_65Th1_cells <- data.frame()
+colnames(clone3Lin6Df_Th1_cells)
+
+# Add all entries from data@meta.data that match TFH CDR3 NT sequences
+for (i in clone3Lin6Df_65Th1$combined_cdr3_nt) {
+  clone3Lin6Df_65Th1_cells <- rbind(clone3Lin6Df_65Th1_cells, immune.combined_edit3_2cell@meta.data[grep(pattern = i, x = immune.combined_edit3_2cell@meta.data$combined_cdr3_nt), ])
+}
+
+
+# Make adjacency matrix (using a data frame for convenience, will convert to matrix later)
+Th1_adjacency <- matrix(nrow = length(unique(clone3Lin6Df_65Th1_cells$v_gene_TRA)) + length(unique(clone3Lin6Df_65Th1_cells$v_gene_TRB)), ncol = length(unique(clone3Lin6Df_65Th1_cells$j_gene_TRA)) + length(unique(clone3Lin6Df_65Th1_cells$j_gene_TRB))) %>% as.data.frame()
+
+# Order rownames and colnames so they agree with the order that table() will produce (factors in ABC order); TRA will stay before TRB because TRA/B are part of gene names
+rownames(Th1_adjacency) <- c(as.character(unique(clone3Lin6Df_65Th1_cells$v_gene_TRA)), as.character(unique(clone3Lin6Df_65Th1_cells$v_gene_TRB))) %>% sort(decreasing = F)
+colnames(Th1_adjacency) <- c(as.character(unique(clone3Lin6Df_65Th1_cells$j_gene_TRA)), as.character(unique(clone3Lin6Df_65Th1_cells$j_gene_TRB))) %>% sort(decreasing = F)
+
+# Remove unused names from factor levels
+clone3Lin6Df_65Th1_cells$j_gene_TRA <- factor(clone3Lin6Df_65Th1_cells$j_gene_TRA)
+
+grep(pattern = "TRA", x = rownames(Th1_adjacency)) # TRA rows are 1 through 31
+grep(pattern = "TRA", x = colnames(Th1_adjacency)) # TRA columns are 1 through 40
+
+#grep(pattern = "TRA", x = rownames(Th1_adjacency)) # TRA rows are 1 through 51
+#grep(pattern = "TRA", x = colnames(Th1_adjacency)) # TRA columns are 1 through 49
+
+
+# Fill in adjacency matrix TRA chains
+for (i in rownames(Th1_adjacency)[1:31]) {
+  Th1_adjacency[i, 1:40] <- clone3Lin6Df_65Th1_cells[clone3Lin6Df_65Th1_cells$v_gene_TRA == i, "j_gene_TRA"] %>% table() %>% as.vector()
+}
+
+### Repeat for TRB chains
+clone3Lin6Df_65Th1_cells$j_gene_TRB <- factor(clone3Lin6Df_65Th1_cells$j_gene_TRB)
+
+grep(pattern = "TRB", x = rownames(Th1_adjacency)) # TRB rows are 32 through 50
+grep(pattern = "TRB", x = colnames(Th1_adjacency)) # TRB columns are 41 through 59
+
+#grep(pattern = "TRB", x = rownames(Th1_adjacency)) # TRB rows are 52 through 76
+#grep(pattern = "TRB", x = colnames(Th1_adjacency)) # TRB columns are 50 through 71
+
+
+
+# Fill in adjacency matrix TRB chains
+for (i in rownames(Th1_adjacency)[32:50]) {
+  Th1_adjacency[i, 41:59] <- clone3Lin6Df_65Th1_cells[clone3Lin6Df_65Th1_cells$v_gene_TRB == i, "j_gene_TRB"] %>% table() %>% as.vector()
+}
+
+# Convert to matrix, then replace all NA values in adjacency matrix with 0
+Th1_adjacency_mat <- as.matrix(Th1_adjacency)
+Th1_adjacency_mat[is.na(Th1_adjacency_mat)] <- 0
+
+# Arrange by frequency of V chain usage, still separating by TRA and TRB
+Th1_orderedrow <- Th1_adjacency_mat[c(order(rowSums(Th1_adjacency_mat[1:31,]), decreasing = T), 31 + order(rowSums(Th1_adjacency_mat[32:50,]), decreasing = T)),]
+# Add 12 to make the ordering match the row number in the matrix
+
+# Arrange by frequency of J chain usage, still separating by TRA and TRB
+Th1_orderedcol <- Th1_orderedrow[, c(40 + order(colSums(Th1_orderedrow[, 41:59]), decreasing = T), order(colSums(Th1_orderedrow[, 1:40]), decreasing = T))]
+# Add 14 to make the ordering match the column number in the matrix
+# Place TRB first so the chord diagram flows from TRA V to TRB V to TRB J to TRA J
+```
+
+
+```{r color assignment}
+color = grDevices::colors()[grep('gr(a|e)y', grDevices::colors(), invert = T)] # Remove grays
+color = color[grep("white", color, invert = T)] # Remove whites
+
+# Assign unique color to each gene that's consistent across all three graphs
+combined_dimnames <- union(dimnames(TFH_adjacency_mat), dimnames(Th1_adjacency_mat)) %>% unlist() %>% unique() %>% sort()
+#combined_dimnames <- union(combined_dimnames, dimnames(Multifate_adjacency_mat)) %>% unlist() %>% unique() %>% sort()
+
+set.seed(102) # Set seed for reproducibility of colors 
+combined_colors <- setNames(sample(color, length(combined_dimnames)), combined_dimnames)
+
+```
+
+```{r TFH graph}
+# All of the following is to prepare the graph to look more aesthetically pleasing
+circos.clear()
+row_sum = sum(rowSums(abs(TFH_orderedcol)))
+col_sum = sum(colSums(abs(TFH_orderedcol)))
+small_gap = 1 # Gaps measured in degrees
+big_gap = 10
+nr = nrow(TFH_orderedcol)
+nc = ncol(TFH_orderedcol)
+n_sector = nr + nc
+row_sector_degree = (360 - small_gap*(n_sector - 2) - big_gap*2) * (row_sum/(row_sum + col_sum)) + 
+                    small_gap*(nr-1)
+start_degree = 0 - (180 - row_sector_degree)/2
+gaps = c(rep(small_gap, 51 - 1), big_gap, rep(small_gap, 78 - 52), big_gap, rep(small_gap, 71 - 51), big_gap, rep(small_gap, 50 - 1), big_gap) 
+# Small gaps between genes of the same kind (e.g. TRA J), large gaps between different types of genes (e.g. TRA J and TRA V)
+circos.par(gap.after = gaps, start.degree = start_degree)
+
+TFH_percent <- c(rowSums(TFH_adjacency_mat)[1:51]/sum(TFH_adjacency_mat[1:51,]), rowSums(TFH_adjacency_mat)[52:78]/sum(TFH_adjacency_mat[52:78,]), colSums(TFH_adjacency_mat)[51:71]/sum(TFH_adjacency_mat[, 51:71]),  colSums(TFH_adjacency_mat)[1:50]/sum(TFH_adjacency_mat[, 1:50])) * 100
+# 11:20 comes before 1:10 because we want TRB J to immediately follow TRB V
+TFH_percent <- round(TFH_percent, digits = 2)
+
+pdf(file = "summary_5mice/Figure4/TFH-AB-5mice_2nd.pdf", width = 8, height = 7)
+chordDiagram(TFH_orderedcol, annotationTrack = "grid", preAllocateTracks = 1, grid.col = combined_colors[intersect(names(combined_colors), unlist(dimnames(TFH_adjacency_mat)))])
+circos.trackPlotRegion(track.index = 1, panel.fun = function(x, y) {
+  xlim = get.cell.meta.data("xlim")
+  ylim = get.cell.meta.data("ylim")
+  sector.name = get.cell.meta.data("sector.index")
+  circos.text(mean(xlim), ylim[1] + .1, sector.name, facing = "clockwise", niceFacing = TRUE, adj = c(-0.2, 0.5), cex = 0.7)
+  circos.axis(h = "top", labels.cex = 0.5, major.tick.percentage = 0.2, sector.index = sector.name, track.index = 2)
+}, bg.border = NA)
+circos.track(track.index = 2, panel.fun = function(x, y) {
+    sector.index = get.cell.meta.data("sector.index")
+    xlim = get.cell.meta.data("xlim")
+    ylim = get.cell.meta.data("ylim")
+    circos.text(mean(xlim), mean(ylim), paste(TFH_percent[sector.index], "%", sep = ""), cex = 0.8, col = "white", niceFacing = TRUE)
+},  bg.border = NA)
+dev.off()
+
+
+```
+
+```{r Th1 graph}
+# All of the following is to prepare the graph to look more aesthetically pleasing
+circos.clear()
+row_sum = sum(rowSums(abs(Th1_orderedcol)))
+col_sum = sum(colSums(abs(Th1_orderedcol)))
+small_gap = 1 # Gaps measured in degrees
+big_gap = 10
+nr = nrow(Th1_orderedcol)
+nc = ncol(Th1_orderedcol)
+n_sector = nr + nc
+row_sector_degree = (360 - small_gap*(n_sector - 2) - big_gap*2) * (row_sum/(row_sum + col_sum)) + 
+                    small_gap*(nr-1)
+start_degree = 0 - (180 - row_sector_degree)/2
+gaps = c(rep(small_gap, 31 - 1), big_gap, rep(small_gap, 50 - 32), big_gap, rep(small_gap, 59 - 41), big_gap, rep(small_gap, 40 - 1), big_gap) 
+# Small gaps between genes of the same kind (e.g. TRA J), large gaps between different types of genes (e.g. TRA J and TRA V)
+circos.par(gap.after = gaps, start.degree = start_degree)
+
+Th1_percent <- c(rowSums(Th1_adjacency_mat)[1:31]/sum(Th1_adjacency_mat[1:31,]), rowSums(Th1_adjacency_mat)[32:50]/sum(Th1_adjacency_mat[32:50,]), colSums(Th1_adjacency_mat)[41:59]/sum(Th1_adjacency_mat[, 41:59]),  colSums(Th1_adjacency_mat)[1:40]/sum(Th1_adjacency_mat[, 1:40])) * 100
+# 11:20 comes before 1:10 because we want TRB J to immediately follow TRB V
+Th1_percent <- round(Th1_percent, digits = 1)
+
+pdf(file = "summary_5mice/Figure4/Th1-AB_5moce.pdf", width = 8, height = 7)
+chordDiagram(Th1_orderedcol, annotationTrack = "grid", preAllocateTracks = 1, grid.col = combined_colors[intersect(names(combined_colors), unlist(dimnames(Th1_adjacency_mat)))])
+circos.trackPlotRegion(track.index = 1, panel.fun = function(x, y) {
+  xlim = get.cell.meta.data("xlim")
+  ylim = get.cell.meta.data("ylim")
+  sector.name = get.cell.meta.data("sector.index")
+  circos.text(mean(xlim), ylim[1] + .1, sector.name, facing = "clockwise", niceFacing = TRUE, adj = c(-0.2, 0.5), cex = 0.7)
+  circos.axis(h = "top", labels.cex = 0.5, major.tick.percentage = 0.2, sector.index = sector.name, track.index = 2)
+}, bg.border = NA)
+circos.track(track.index = 2, panel.fun = function(x, y) {
+    sector.index = get.cell.meta.data("sector.index")
+    xlim = get.cell.meta.data("xlim")
+    ylim = get.cell.meta.data("ylim")
+    circos.text(mean(xlim), mean(ylim), paste(Th1_percent[sector.index], "%", sep = ""), cex = 0.8, col = "white", niceFacing = TRUE)
+},  bg.border = NA)
+dev.off()
+```
+
+```{r}
+### make a DF that shows clones, orig.ident, fate, Th1, TFH, Tcmp module score #### DO THIS LATER ##################
+
+clone3Lin6Df_TFH_module_score <- clone3Lin6Df_TFH_cells %>% select(orig.ident, combined_cdr3_nt, Geneset_Tfh1) %>% as.data.frame()
+
+table(clone3Lin6Df_TFH_module_score$Geneset_Tfh1) %>% length() # 85
+
+###################### DO THOS LATER ###############################
+
+```
+
